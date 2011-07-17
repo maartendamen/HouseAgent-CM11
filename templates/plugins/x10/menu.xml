@@ -1,0 +1,14 @@
+<items>
+    <item name="X10" url="#x10" image="/images/plugins/x10/x10_icon.png">
+        <subitem>
+            <name>Add device</name>
+            <url>/x10_add</url>
+            <description>Add an X10 compatible device.</description>
+        </subitem>
+        <subitem>
+            <name>Manage devices</name>
+            <url>/x10_man</url>
+            <description>This page allows management of the X10 devices created in the HouseAgent database.</description>
+        </subitem>
+    </item>
+</items>

@@ -1,0 +1,195 @@
+<%inherit file="/master.html"/>
+
+<%def name="head()">
+
+<script language='javascript'>
+	
+    function replacer(key, value) {
+        if (typeof value === 'number' && !isFinite(value)) {
+            return String(value);
+        }
+        return(value);
+    }
+    
+    function json_encode(value) {
+        var myJSONText = JSON.stringify(value, replacer);
+        return(myJSONText);
+    }
+
+	// Initialize the form as soon as the document has been loaded
+	$(document).ready(function() {
+		
+		// Hide all validation errors	
+		$('.error').hide();
+
+		// Create a nice button
+		$('#adddevice_button').button();
+
+		// Handler bound to button    
+		$('#adddevice_button').click(function() {
+        	var valueids = []
+
+			// Validate fields
+			if ($('input#name').val() == "") {
+				$('label#name_error').show();
+				$('#name').focus();
+
+				return(false);
+			}
+			
+			// Determine which characteristics have been selected
+        	$('input:checked').each(function() {          
+            	valueids.push($(this).attr('id'));
+        	});
+
+			// Determine properties of the device
+        	device_data = {'valueids':		valueids,
+            	           'hcdc':			$('#hc').val() + $('#dc').val(),
+                	       'pluginid':		"${pluginid}",
+                    	   'pluginguid':	"${pluginguid}",
+						   'location':		$('#locations').val(),
+                       	   'name':			$('input#name').val()
+						  };
+
+			// Post the results to add the device to the database
+			$.ajax({
+          		type:		'POST',
+          		url:		'/x10_added',
+          		data:		json_encode(device_data),
+		  		success:	function(data) {
+								// Show operation was successful
+								$("#message").html('<img height="16" width="16" align="left" class="message" src="/images/ok.png">Device \'' + $('#hc').val() + $('#dc').val() + '\' succesfully saved to the database!');
+								$('#message').show('slow', function() {
+								});
+								
+								// Reset form
+								$('#device_add')[0].reset();							}
+			});
+		
+			return(false);
+		
+    	});     
+	});
+</script>
+</%def>
+
+<%def name="content()">
+	<div id="output"></div>
+	<table cellspacing="0" cellpadding="0" align="center" width="100%" id="devices">
+    	<tbody>
+			<tr>
+				<td class="HeadText">Add X10 device to the HouseAgent database</td>
+			</tr>
+			<tr>
+				<td class="body info">
+					<p>This page allows you to add this device to the database. Please select the values you would like to log..</p>
+				</td>
+			</tr>
+		</tbody>
+	</table>
+	
+	<form name="device_add" id="device_add">
+		<table class="InfoTable" cellspacing="0" cellpadding="2" border="0" width="40%">
+			<tbody>
+				<tr>
+					<td class="Head2" colspan="2">Device properties</td>
+				</tr>
+				<tr>
+					<td class="Label">
+						<span class="requiredfield">*</span>House Code:
+					</td>
+					<td>
+						<select style="width:40px" id="hc">
+							% for i in range(65,81):
+								<option value="${chr(i)}">${chr(i)}</option>
+							% endfor
+						</select>       
+					</td>
+				</tr>
+				<tr>
+					<td class="Label">
+						<span class="requiredfield">*</span>Device Code:
+					</td>
+					<td>
+						<select style="width:40px" id="dc">
+							% for i in range(1,17):
+								<option value="${i}">${i}</option>
+							% endfor
+						</select>       
+					</td>
+				</tr>
+				<tr>
+					<td class="Label">
+						<span class="requiredfield">*</span>Device name: 
+					</td>
+					<td>
+						<input class="Field250" name="name" id="name">
+						<label class="error" for="name" id="name_error">This field is required.</label>
+					</td>
+				</tr>
+				<tr>
+					<td class="Label">
+						<span class="requiredfield">*</span>Location: 
+					</td>
+					<td colspan="3">
+						<select id="locations">
+							% for location in locations:
+								<option value="${location[0]}">${location[1]}</option>
+							% endfor
+						</select>       
+					</td>
+				</tr>
+			</tbody>
+		</table>
+
+		<table class="InfoTable" cellspacing="0" cellpadding="0" border="0" width="40%">
+			<tbody>
+				<tr class="HeadTable">
+					<td colspan="2" nowrap="">Characteristics</td>
+				</tr>
+				<tr class="Row">
+					<td width="5%"><input type="checkbox" id="allunitsoff"></td>
+					<td>Respond to <i>All Units Off</i></td>
+				</tr>
+				<tr class="Row">
+					<td width="5%"><input type="checkbox" id="alllightsoff"></td>
+					<td>Respond to <i>All Lights Off</i></td>
+				</tr>
+				<tr class="Row">
+					<td width="5%"><input type="checkbox" id="alllightson"></td>
+					<td>Respond to <i>All Lights On</i></td>
+				</tr>
+				<tr class="Row">
+					<td width="5%"><input type="checkbox" id="statusrequest"></td>
+					<td>Respond to <i>status request</i></td>
+				</tr>
+				<tr class="Row">
+					<td width="5%"><input type="checkbox" id="reportstatus"></td>
+					<td>Report status change</td>
+				</tr>
+				<tr class="Row">
+					<td width="5%"><input type="checkbox" id="presetdim"></td>
+					<td>Supports Extended Preset Dimming</td>
+				</tr>
+				<tr class="Row">
+					<td width="5%"><input type="checkbox" id="standarddim"></td>
+					<td>Supports Standard Dimming</td>
+				</tr>
+			</tbody>
+		</table>
+
+		<div id="message" class="message"></div>
+
+		<table class="PanelPlain" cellspacing="0" cellpadding="2" border="0" width="100%">
+			<tbody>
+				<tr>
+					<td height="30" valign="top">
+						<button id="adddevice_button">Add device</button><br><br>
+					</td>
+				</tr>
+			</tbody>
+		</table>
+	</form>
+	
+
+</%def>
