@@ -4,21 +4,35 @@
 <script language='javascript'>
 $(document).ready(function() 
 {
+   function replacer(key, value) {
+        if (typeof value === 'number' && !isFinite(value)) {
+            return String(value);
+        }
+        return(value);
+    }
+    
+    function json_encode(value) {
+        var myJSONText = JSON.stringify(value, replacer);
+        return(myJSONText);
+    }
+	
     $('table td img.delete').click(function(){
         var answer = confirm("Are you sure you want to delete this device? Please note that this will also delete any values associated with this device!")
         if (answer){
-            var elem = $(this)
-            id = $(this).parent().parent().parent().attr('id')
-			hcdc = $(this).parent().parent().parent().attr('hcdc')
-            var dataString = 'id=' + id +'&hcdc=' + hcdc;
+			var elem = $(this)
+            var device_data = {'id':			$(this).parent().parent().parent().attr('id'),
+			               	   'pluginid':		"${pluginid}",
+                    	       'pluginguid':	"${pluginguid}",
+							   'hcdc':			$(this).parent().parent().parent().attr('hcdc')
+							  };
             
             $.ajax({
-                type: "POST",
-                url: "/x10_del", 
-                data: dataString,
-                success: function(data) {
-                            elem.parent().parent().parent().remove();
-                         }
+                type:		"POST",
+                url:		"/x10_del", 
+                data:		json_encode(device_data),
+                success:	function(data) {
+                            	elem.parent().parent().parent().remove();
+                         	}
             });
         }   
         return false;
@@ -51,7 +65,7 @@ $(document).ready(function()
 							<td nowrap="" width="6%">Actions</td>
 						</tr>
 						% for device in result:
-						<tr class="Row" id=${device[0]} hcdc=$(device[2])>
+						<tr class="Row" id=${device[0]} hcdc=${device[2]}>
 							<td>${device[1]}</td>
 							<td>${device[2]}</td>
 							<td>${device[3]}</td>

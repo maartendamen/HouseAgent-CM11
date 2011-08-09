@@ -212,9 +212,9 @@
 				<tr class="Row">
 					<td width="5%">
 						% if characteristics["presetdim"] == True:
-							<input type="checkbox" id="presetdim" checked>
+							<input type="radio" name="dimmable" id="presetdim" checked>
 						% else:
-							<input type="checkbox" id="presetdim">
+							<input type="radio" name="dimmable" id="presetdim">
 						% endif
 					</td>
 					<td>Supports Extended Preset Dimming</td>
@@ -222,9 +222,9 @@
 				<tr class="Row">
 					<td width="5%">
 						% if characteristics["standarddim"] == True:
-							<input type="checkbox" id="standarddim" checked>
+							<input type="radio" name="dimmable" id="standarddim" checked>
 						% else:
-							<input type="checkbox" id="standarddim">
+							<input type="radio" name="dimmable" id="standarddim">
 						%endif
 					</td>
 					<td>Supports Standard Dimming</td>

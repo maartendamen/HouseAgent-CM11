@@ -1,4 +1,4 @@
-import os, sys
+import os, sys, math
 from twisted.internet.serialport import SerialPort
 from twisted.protocols import basic
 import ConfigParser
@@ -56,13 +56,14 @@ class CM11Protocol(basic.LineReceiver):
         self.recbytes = 0
         self.recbuf = []
         self.sndbuf = []
+        self.updbuf = []
         self.address = {}
         self.hex = ''
         self.message = False
         self.bReady = True
         self.call = None
         self.msglen = 0
-
+        self.failedSendAttempts = 0
         self.waitonchecksum = False
         self.checksum = 0
         self.dc = ['13', '5', '3', '11', '15', '7', '1', '9', '14', '6', '4', '12', '16', '8', '2', '10']
@@ -83,13 +84,13 @@ class CM11Protocol(basic.LineReceiver):
                      'Status on',
                      'Status off',
                      'Status request']
-        self.extdim = [0, 2, 4, 5, 15, 17, 18, 20, 21, 22,
-                       23, 25, 26, 28, 29, 31, 32, 34, 35, 37,
-                       38, 40, 41, 43, 44, 46, 48, 50, 51, 53,
-                       54, 56, 58, 60, 61, 63, 64, 66, 67, 69,
-                       71, 73, 74, 76, 77, 79, 80, 82, 83, 85,
-                       86, 88, 88, 90, 91, 92, 93, 95, 96, 97,
-                       98, 99, 100, 100]
+        self.extdim = [0, 2, 3, 5, 6, 8, 10, 11, 13, 15, 
+                       16, 18, 19, 21, 23, 24, 26, 27, 29, 31,
+                       32, 34, 35, 37, 39, 40, 42, 44, 45, 47,
+                       48, 50, 52, 53, 55, 56, 58, 60, 61, 63,
+                       65, 66, 68, 69, 71, 73, 74, 76, 77, 79,
+                       81, 82, 84, 85, 87, 89, 90, 92, 94, 95,
+                       97, 98, 100, 100] 
    
     def connectionMade(self):
         log.msg("Connected to CM11 interface...")
@@ -109,11 +110,24 @@ class CM11Protocol(basic.LineReceiver):
                 log.msg("Received checksum: %02x" % ord(char))
                 if ord(char) == self.checksum:
                     log.msg("Correct checksum")
+                    self.failedSendAttempts = 0
                     self.transport.write('\x00')
                 else:
                     log.msg("Checksum should have been: %02x" % self.checksum)
-                    # Resend
-                    self.sendcommand()
+                    self.failedSendAttempts += 1
+                    log.msg("Failed send attempts: %d" % self.failedSendAttempts)
+                    if self.failedSendAttempts < 3:
+                        # Resend
+                        self.sendcommand()
+                    else:
+                        self.failedSendAttempts = 0
+                        log.msg("ERROR: Maximum number of failed send attempts reached, delete command from queue")
+                        self.waitonchecksum = False
+                        # Remove command from send queue
+                        del self.sndbuf[0]
+                        if len(self.sndbuf):
+                            self.sendcommand()
+                        
 
             # The maximum number of bytes received as a data block should be less
             # than 10 bytes. The first byte received that is part of a data block
@@ -137,7 +151,6 @@ class CM11Protocol(basic.LineReceiver):
             elif ord(char) == 0x55:
                 log.msg("Command has been send")
                 self.bReady = True
-                self.waitonchecksum = False
                 del self.sndbuf[0]
                 if len(self.sndbuf):
                     self.sendcommand()
@@ -185,7 +198,8 @@ class CM11Protocol(basic.LineReceiver):
         while index < len(buffer) - 1:
             #log.msg("Index: %d, Length: %d, Mask: %02x, Char: %02X" % (index, len(buffer), mask, buffer[index+1]))
             
-            # Process commands
+            # Process commands (apply the function/address mask to the first byte in the buffer
+            # to determine whether the next byte to be processed is an address or a function
             if buffer[0] & mask:
                 
                 # Received a BRIGHT or DIM command
@@ -194,7 +208,7 @@ class CM11Protocol(basic.LineReceiver):
                         # Issue for each specified device with the specified house code the specified command
                         try:
                             for dc in self.address[self.hc[(buffer[index + 1] & 0xF0) >> 4]]:
-                                log.msg("%s%s %s %d%%" % (self.hc[(buffer[index + 1] & 0xF0) >> 4], dc, self.cmd[buffer[index + 1] & 0x0F],  buffer[index + 2] * 100 / 210))
+                                log.msg("%s%s %s %d (%d%%)" % (self.hc[(buffer[index + 1] & 0xF0) >> 4], dc, self.cmd[buffer[index + 1] & 0x0F],  buffer[index + 2], buffer[index + 2] * 100 / 210))
                                 
                                 hcdc = self.hc[(buffer[index + 1] & 0xF0) >> 4] + dc
                                 item = next((i for i in xrange(len(listDevices)) if listDevices[i].hcdc == hcdc), None)
@@ -387,7 +401,7 @@ class CM11Protocol(basic.LineReceiver):
                         self.address = {}
                         
                     except KeyError:
-                        log.msg("%s%s %s" % (self.hc[(buffer[index + 1] & 0xF0) >> 4], self.cmd[buffer[index + 1] & 0x0F]))
+                        log.msg("%s %s" % (self.hc[(buffer[index + 1] & 0xF0) >> 4], self.cmd[buffer[index + 1] & 0x0F]))
                         log.msg("Error: Received an ON or OFF command without a device has been specified")
 
                     # Increase the index of bytes to be processed
@@ -435,41 +449,131 @@ class CM11Protocol(basic.LineReceiver):
         """
         Set status of specified device to on
         """
-        # Put the device address on the send queue
-        self.sndbuf.append('\04' + chr(self.hc.index(hcdc[0].upper()) << 4 | self.dc.index(hcdc[1])))
-        # Put the on command on the send queue 
-        self.sndbuf.append('\06' + chr(self.hc.index(hcdc[0].upper()) << 4 | self.cmd.index('On')))
-        self.sendcommand()
-
         # Update in memory list and send update to core
         item = next((i for i in xrange(len(listDevices)) if listDevices[i].hcdc == hcdc), None)
         if item is not None:
             listDevices[item].Status = "On"
-            self.wrapper.pluginapi.value_update(hcdc, {"Status": "On"})
+            if listDevices[item].standarddim == True or listDevices[item].presetdim == True:
+                self.wrapper.pluginapi.value_update(hcdc, {"Status": "On", "Level": 100})
+                listDevices[item].Value = 100
+            else:
+                self.wrapper.pluginapi.value_update(hcdc, {"Status": "On"})
         else:
             log.msg("Error: '%s' is not in in-memory list")
+
+        # Put the device address on the send queue
+        self.sndbuf.append(chr(0x04) + chr(self.hc.index(hcdc[0].upper()) << 4 | self.dc.index(hcdc[1:])))
+        # Put the on command on the send queue 
+        self.sndbuf.append(chr(0x06) + chr(self.hc.index(hcdc[0].upper()) << 4 | self.cmd.index('On')))
+        self.sendcommand()
         
     def poweroff(self, hcdc):
         """
         Set status of specified module to off
         """
+        # Update in memory list and send update to core
+        item = next((i for i in xrange(len(listDevices)) if listDevices[i].hcdc == hcdc), None)
+        if item is not None:
+            listDevices[item].Status = "Off"
+            if listDevices[item].standarddim == True or listDevices[item].presetdim == True:
+                self.wrapper.pluginapi.value_update(hcdc, {"Status": "Off", "Level": 0})
+                listDevices[item].Value = 0
+            else:
+                self.updbuf.append({"address": hcdc, "message": {"Status": "Off"}})
+        else:
+            log.msg("Error: '%s' is not in in-memory list")
+
         # Put the device address on the send queue
-        self.sndbuf.append('\04' + chr(self.hc.index(hcdc[0].upper()) << 4 | self.dc.index(hcdc[1])))
+        self.sndbuf.append('\04' + chr(self.hc.index(hcdc[0].upper()) << 4 | self.dc.index(hcdc[1:])))
         # Put the on command on the send queue 
         self.sndbuf.append('\06' + chr(self.hc.index(hcdc[0].upper()) << 4 | self.cmd.index('Off')))
         self.sendcommand()
 
+    def dim(self, hcdc, level):
+        """
+        Dim the specified device to the specified level
+        """
         # Update in memory list and send update to core
-        index = next((i for i in xrange(len(listDevices)) if listDevices[i].hcdc == hcdc), None)
-        if index is not None:
-            listDevices[index].Status = "Off"
-            self.wrapper.pluginapi.value_update(hcdc, {"Status": "Off"})
-        else:
+        item = next((i for i in xrange(len(listDevices)) if listDevices[i].hcdc == hcdc), None)
+        if item is None:
             log.msg("Error: '%s' is not in in-memory list")
-    
+        else:
+            if listDevices[item].standarddim == True:
+                log.msg("DEBUG: Level: %s, Current: %d" % (level, listDevices[item].value))
+                if listDevices[item].value > int(level):
+                    # Calculate number of dim actions
+                    dims = int((listDevices[item].value - int(level)) * 22 / 100)
+                    newlevel = listDevices[item].value - dims * 100 / 22
+                    log.msg("DIMS: %d (%f)" % (dims, dims * 100 / 22))
+                                   
+                    # Put the house and device code on the send queue
+                    self.sndbuf.append('\04' + chr(self.hc.index(hcdc[0].upper()) << 4 | self.dc.index(hcdc[1:])))
+                    
+                    # Put the command on the send queue
+                    self.sndbuf.append(chr(dims << 3 | 0x06) +
+                                       chr(self.hc.index(hcdc[0].upper()) << 4 | CMD_DIM) 
+                                       )
+                    log.msg("DIM: %02X %02X" % (dims << 3 | 0x06, self.hc.index(hcdc[0].upper()) << 4 | CMD_DIM))
+                    log.msg("DIM to %d%%" % newlevel)
+                
+                else:
+                    # Calculate number of bright actions
+                    brights = int((int(level) - listDevices[item].value) * 22 / 100)
+                    newlevel = listDevices[item].value + brights * 100 / 22
+                    log.msg("BRIGHTS: %d (%d)" % (brights, brights * 100/22))
+                                   
+                    # Put the house and device code on the send queue
+                    self.sndbuf.append('\04' + chr(self.hc.index(hcdc[0].upper()) << 4 | self.dc.index(hcdc[1:])))
+                    
+                    # Put the command on the send queue
+                    self.sndbuf.append(chr(brights << 3 | 0x06) +
+                                       chr(self.hc.index(hcdc[0].upper()) << 4 | CMD_BRIGHT) 
+                                       )
+
+                    log.msg("BRIGHT: %02X %02X" % (brights << 3 | 0x06, self.hc.index(hcdc[0].upper()) << 4 | CMD_BRIGHT))
+                    log.msg("BRIGHT to %d%%" % newlevel)
+
+            elif listDevices[item].presetdim == True:
+                log.msg("Send extended preset dim command")
+                
+                # Determine the data to be send (find exact or next higher match for the specified level)
+                for i in range (0,63):
+                    if self.extdim[i] >= int(level) and i > 0:
+                        newlevel = self.extdim[i]
+                        break
+                    
+                # Put the header, code, data and command on the send queue
+                self.sndbuf.append(chr(0x07) + 
+                                   chr(self.hc.index(hcdc[0].upper()) << 4 | 0x07) +
+                                   chr(self.dc.index(hcdc[1:])) +
+                                   chr(i) +
+                                   chr(0x31)    
+                                   )
+
+            else:
+                log.msg("The specified device '%' does not support dimming" % hcdc)
+                return    
+
+            # Update in memory list and send update to core
+            if newlevel == 0:
+                listDevices[item].Status = "Off"
+            elif newlevel == 100:
+                listDevices[item].Status = "On"
+            else:
+                listDevices[item].Status = "Dimmed"
+            
+            listDevices[item].value = newlevel
+                    
+            # Send update to the core
+            self.wrapper.pluginapi.value_update(hcdc, {"Status": listDevices[item].Status, "Level": newlevel})
+                
+            # Send the command
+            self.sendcommand()
+
+
     def sendcommand(self):
         """
-        Send's command to the CM11
+        Send a command to the CM11
         """
         if len(self.sndbuf) == 0:
             log.msg("No commands left in the send queue")
@@ -478,8 +582,15 @@ class CM11Protocol(basic.LineReceiver):
             self.checksum = 0
             for byte in self.sndbuf[0]:
                 self.checksum += ord(byte)
-            self.waitonchecksum = True
-            self.transport.write(self.sndbuf[0])
+                log.msg("SEND ON POWERLINE: %02x" % ord(byte))
+            self.checksum &= 0xff
+            if self.bReady == True:
+                self.waitonchecksum = True
+                self.bReady = False
+                self.transport.write(self.sndbuf[0])
+            else:
+                log.msg("Waiting to send")
+
     
 class CM11Wrapper():
     def __init__(self):
@@ -491,7 +602,12 @@ class CM11Wrapper():
         
         config = ConfigParser.RawConfigParser()
         config.read(os.path.join(self.config_path, 'hacm11.conf'))
+        
 
+        print "DEBUG: get_configurationpath: ", self.config_path
+        print "DEBUG: os.getcwd: ", os.getcwd( )
+        print "DEBUG: sys.path:", sys.path
+        
         # Get serial port information
         self.port = config.get("serial", "port")
 
@@ -511,6 +627,7 @@ class CM11Wrapper():
         
         self.pluginapi.register_poweron(self)
         self.pluginapi.register_poweroff(self)
+        self.pluginapi.register_dim(self)
         self.pluginapi.register_custom(self)
         
         self.protocol = CM11Protocol(self)
@@ -570,6 +687,11 @@ class CM11Wrapper():
         log.msg("Turn %s off" % hcdc)
         self.protocol.poweroff(hcdc)
         return {'processed': True}
+
+    def on_dim(self, hcdc, level):
+        log.msg("Dim %s to %s%%" % (hcdc, level))
+        self.protocol.dim(hcdc, level)
+        return {'processed': True} 
     
     def on_custom(self, command, parameters):
         """
@@ -579,7 +701,7 @@ class CM11Wrapper():
         
         if command == 'add_characteristics':
             '''
-            With this command you can add certain characteristics to a new X10 device.
+            This command sets the characteristics of a new X10 device and starts monitoring it.
             '''
             newdevice = Device(parameters["hcdc"])
             
@@ -616,7 +738,7 @@ class CM11Wrapper():
 
         elif command == 'set_characteristics':
             '''
-            With this command you set the characteristics of an existing X10 device.
+            This command sets the characteristics of the specified X10 device.
             '''
             item = next((i for i in xrange(len(listDevices)) if listDevices[i].hcdc == parameters["hcdc"]), None)
             if item is not None:
@@ -659,11 +781,12 @@ class CM11Wrapper():
 
         elif command == 'get_characteristics':
             '''
-            With this command you set the characteristics of an existing X10 device.
+            This command retrieves the characteristics of the specified X10 device.
             '''
             item = next((i for i in xrange(len(listDevices)) if listDevices[i].hcdc == parameters["hcdc"]), None)
-            if item is not None:
-
+            if item is None:
+                log.msg("Error: Retrieved device characteristics of a device not being monitored.")
+            else:
                 return({"alllightsoff":  listDevices[item].alllightsoff,
                         "allunitsoff":   listDevices[item].allunitsoff,
                         "alllightson":   listDevices[item].alllightson,
@@ -672,6 +795,19 @@ class CM11Wrapper():
                         "statusrequest": listDevices[item].statusrequest,
                         "reportstatus":  listDevices[item].reportstatus})
 
+        elif command == 'del_characteristics':
+            '''
+            This command stops monitoring of the specified X10 device.
+            '''
+            item = next((i for i in xrange(len(listDevices)) if listDevices[i].hcdc == parameters["hcdc"]), None)
+            if item is not None:
+                log.msg("Stopped monitoring X10 device (%s)" % parameters["hcdc"])
+                
+                del listDevices[item]
+                
+                # Write XML file containing details of monitored devices
+                self.writeXML()
+                
             else:
                 log.msg("Unknown device specified (%s)" % parameters["hcdc"])
                 return(None)
@@ -704,7 +840,28 @@ class CM11Wrapper():
             char = ET.SubElement(dev, "reportstatus")
             char.text = str(device.reportstatus)
 
+        # Function to indent XML output
+        # Source: http://infix.se/2007/02/06/gentlemen-indent-your-xml
+        def indent(elem, level=0):
+            i = "\n" + level*"  "
+            if len(elem):
+                if not elem.text or not elem.text.strip():
+                    elem.text = i + "  "
+                    
+                for e in elem:
+                    indent(e, level+1)
+                    if not e.tail or not e.tail.strip():
+                        e.tail = i + "  "
+                        
+                if not e.tail or not e.tail.strip():
+                        e.tail = i
+                        
+            else:
+                if level and (not elem.tail or not elem.tail.strip()):
+                    elem.tail = i
+                            
         tree = ET.ElementTree(root)
+        indent(tree.getroot())
         tree.write(xml_file)
         file.close()
 
